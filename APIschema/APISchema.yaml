@@ -1,0 +1,121 @@
+openapi: 3.0.0
+info:
+  title: Redshift Serverless Database Schema and ACL API
+  version: 1.0.0
+  description: APIs for retrieving database table schemas, executing queries on database tables, and retrieving user access to schemas in Redshift Serverless.
+
+paths:
+  /getschema:
+    post:
+      summary: Get a list of all tables and their schema in the specified database
+      description: Retrieve the list of all tables and their schemas for the specified database in Redshift Serverless.
+      operationId: getschema
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              properties:
+                db:
+                  type: string
+                  description: The name of the database to retrieve the schema from.
+              required:
+                - db
+      responses:
+        '200':
+          description: Successfully retrieved the list of table names and their schemas
+          content:
+            application/json:
+              schema:
+                type: array
+                items:
+                  type: object
+                  properties:
+                    Table:
+                      type: string
+                      description: The name of the table in the database.
+                    Schema:
+                      type: string
+                      description: The schema of the table in JSON format, containing all columns.
+        '400':
+          description: Bad request. The database name is missing or invalid.
+
+  /querydatabase:
+    post:
+      summary: Execute a query on a specific database table
+      description: Send a query to the Redshift Serverless database to retrieve information. The API accepts one SQL query at a time and returns the query results.
+      operationId: querydatabase
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              properties:
+                user_id:
+                  type: string
+                  description: The ID of the user executing the query. Optional for DESCRIBE queries.
+                database:
+                  type: string
+                  description: The name of the database where the query will be executed.
+                schema:
+                  type: string
+                  description: The name of the schema containing the table.
+                table:
+                  type: string
+                  description: The name of the table to query.
+                query:
+                  type: string
+                  description: SQL statement to query the database table.
+              required:
+                - database
+                - schema
+                - query
+      responses:
+        '200':
+          description: Query executed successfully
+          content:
+            application/json:
+              schema:
+                type: array
+                items:
+                  type: object
+                  description: Each object represents a row from the query result.
+        '400':
+          description: Bad request. One or more required fields are missing or invalid.
+        '403':
+          description: Forbidden. User does not have access to the specified schema.
+
+  /getUserACL:
+    post:
+      summary: Get user's access to schemas
+      description: Retrieve the list of schemas a given user has access to in Redshift Serverless.
+      operationId: getUserACL
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              properties:
+                user_id:
+                  type: string
+                  description: The ID of the user to retrieve the schema access for.
+              required:
+                - user_id
+      responses:
+        '200':
+          description: Successfully retrieved the user's access to schemas
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  schemas:
+                    type: array
+                    items:
+                      type: string
+                    description: A list of schemas the user has access to.
+        '400':
+          description: Bad request. The user_id is missing or invalid.

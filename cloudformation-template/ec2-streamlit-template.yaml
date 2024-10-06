@@ -1,0 +1,548 @@
+  AWSTemplateFormatVersion: '2010-09-09'
+  Description: CloudFormation template to launch an EC2 instance with Streamlit application and a Bedrock Agent.
+
+  Parameters:
+    InstanceType:
+      Description: EC2 instance type
+      Type: String
+      Default: t3.small
+      AllowedValues:
+        - t3.small
+        - t3.medium
+        - t3.large
+    MapPublicIpOnLaunch:
+      Description: Disabled by default. Enable for public IP assignment for EC2 instance connect
+      Type: String
+      Default: true
+      AllowedValues:
+        - false
+        - true
+    VPCCIDR:
+      Description: VPC CIDR
+      Type: String
+      Default: 10.2.1.0/16
+    VPCSubnet:
+      Description: VPC CIDR
+      Type: String
+      Default: 10.2.1.0/24
+    KeyPair:
+      Description: Amazon EC2 Key Pair for SSH access
+      Type: AWS::EC2::KeyPair::KeyName
+    AgentName:
+      Description: Name of the Bedrock Agent
+      Type: String
+      Default: MyBedrockAgent
+    AgentDescription:
+      Description: Description of the Bedrock Agent
+      Type: String
+      Default: A Bedrock Agent for text-to-SQL conversion
+    RedshiftWorkgroupName:
+      Type: String
+      Description: Name of the Redshift Serverless workgroup
+      Default: genai-wg
+    S3BucketName:
+      Type: String
+      Description: Name of the S3 bucket containing the API schema
+      Default: redshiftgenaidemo-assets
+    AllowedIP:
+      Type: String
+      Description: IP address to allow SSH access to the EC2 instance
+      Default: 5.30.213.85/32
+  Resources:
+    # Create a VPC
+    VPC:
+      Type: 'AWS::EC2::VPC'
+      Properties:
+        CidrBlock: !Ref VPCCIDR
+        Tags:
+          - Key: Name
+            Value: Bedrock-VPC
+
+    # Create a Subnet within the VPC
+    Subnet:
+      Type: 'AWS::EC2::Subnet'
+      Properties:
+        VpcId: !Ref VPC
+        CidrBlock: !Ref VPCSubnet
+        MapPublicIpOnLaunch: !Ref MapPublicIpOnLaunch # Disable/Enables public IP to EC2
+        Tags:
+          - Key: Name
+            Value: Bedrock-Subnet
+
+    # Create an Internet Gateway
+    InternetGateway:
+      Type: 'AWS::EC2::InternetGateway'
+      Properties:
+        Tags:
+          - Key: Name
+            Value: Bedrock-InternetGateway
+
+    # Attach the Internet Gateway to the VPC
+    AttachGateway:
+      Type: 'AWS::EC2::VPCGatewayAttachment'
+      Properties:
+        VpcId: !Ref VPC
+        InternetGatewayId: !Ref InternetGateway
+
+    # Create a Route Table
+    RouteTable:
+      Type: 'AWS::EC2::RouteTable'
+      Properties:
+        VpcId: !Ref VPC
+        Tags:
+          - Key: Name
+            Value: Bedrock-RouteTable
+
+    # Create a Route in the Route Table to the Internet
+    Route:
+      Type: 'AWS::EC2::Route'
+      DependsOn: AttachGateway
+      Properties:
+        RouteTableId: !Ref RouteTable
+        DestinationCidrBlock: 0.0.0.0/0  # Example for us-east-1 region, EC2 service
+        GatewayId: !Ref InternetGateway
+
+    # Associate the Subnet with the Route Table
+    SubnetRouteTableAssociation:
+      Type: 'AWS::EC2::SubnetRouteTableAssociation'
+      Properties:
+        SubnetId: !Ref Subnet
+        RouteTableId: !Ref RouteTable
+
+    # Create a Security Group to allow HTTP traffic on port 8501 and SSH traffic
+    InstanceSecurityGroup:
+      Type: 'AWS::EC2::SecurityGroup'
+      Properties:
+        GroupDescription: Allow HTTP traffic on port 8501 and SSH traffic
+        VpcId: !Ref VPC
+        SecurityGroupIngress:
+          - IpProtocol: tcp
+            FromPort: 8501
+            ToPort: 8501
+            CidrIp: 0.0.0.0/0
+          - IpProtocol: tcp
+            FromPort: 22
+            ToPort: 22
+            CidrIp: !Ref AllowedIP
+
+    # Security Group Egress Rule
+    InstanceSecurityGroupEgress:
+      Type: 'AWS::EC2::SecurityGroupEgress'
+      Properties:
+        GroupId: !Ref InstanceSecurityGroup
+        IpProtocol: -1  # Allows all outbound traffic
+        FromPort: -1
+        ToPort: -1
+        CidrIp: 0.0.0.0/0
+
+    # Create an IAM Role for the EC2 instance to use SSM and Amazon Bedrock
+    EC2Role:
+      Type: 'AWS::IAM::Role'
+      Properties:
+        AssumeRolePolicyDocument:
+          Version: '2012-10-17'
+          Statement:
+            - Effect: Allow
+              Principal:
+                Service: ec2.amazonaws.com
+              Action: sts:AssumeRole
+        ManagedPolicyArns:
+          - arn:aws:iam::aws:policy/AmazonBedrockFullAccess
+          - arn:aws:iam::aws:policy/AmazonSSMManagedInstanceCore  # Managed policy for SSM permissions
+          - arn:aws:iam::aws:policy/AmazonS3ReadOnlyAccess  # Managed policy for S3 read access
+          - arn:aws:iam::aws:policy/AmazonEC2ReadOnlyAccess  # Managed policy for EC2 read access
+
+    # Create an Instance Profile for the EC2 instance
+    InstanceProfile:
+      Type: 'AWS::IAM::InstanceProfile'
+      Properties:
+        Roles:
+          - !Ref EC2Role
+
+    # Create the EC2 instance
+    EC2Instance:
+      Type: 'AWS::EC2::Instance'
+      Properties:
+        InstanceType: !Ref InstanceType
+        ImageId: !Sub "{{resolve:ssm:/aws/service/canonical/ubuntu/server/22.04/stable/current/amd64/hvm/ebs-gp2/ami-id}}"
+        IamInstanceProfile: !Ref InstanceProfile
+        SecurityGroupIds:
+          - !Ref InstanceSecurityGroup
+        SubnetId: !Ref Subnet
+        KeyName: !Ref KeyPair  # Reference the KeyPair parameter
+        EbsOptimized: true
+        Monitoring: true
+        Tags:
+          - Key: Name
+            Value: EC2-Streamlit-App
+        UserData:
+          Fn::Base64: !Sub |
+            #!/bin/bash
+            exec > >(tee /var/log/user-data.log) 2>&1
+            echo "Starting user data script execution"
+
+            echo "Updating package lists"
+            apt-get update -y || echo "Failed to update package lists"
+
+            echo "Upgrading packages"
+            apt-get upgrade -y || echo "Failed to upgrade packages"
+
+            echo "Installing required packages"
+            apt-get install -y python3-pip git awscli || echo "Failed to install one or more packages"
+
+            echo "Creating app directory"
+            mkdir -p /home/ubuntu/app || echo "Failed to create app directory"
+
+            echo "Copying files from S3"
+            aws s3 cp s3://${S3BucketName}/bedrock-agent-text2sql-redshift/ /home/ubuntu/app/ --recursive || echo "Failed to copy files from S3"
+
+            echo "Installing Python requirements"
+            pip3 install -r /home/ubuntu/app/streamlit_app/requirements.txt || echo "Failed to install Python requirements"
+
+            echo "Setting correct ownership"
+            chown -R ubuntu:ubuntu /home/ubuntu/app || echo "Failed to set ownership"
+
+            # Create and populate the environment variables file
+            echo "export AGENT_ID=${BedrockAgent}" | sudo tee /etc/profile.d/bedrock_env.sh
+            echo "export AGENT_ALIAS_ID=${BedrockAgentAlias.AgentAliasId}" | sudo tee -a /etc/profile.d/bedrock_env.sh
+            echo "export AWS_REGION=${AWS::Region}" | sudo tee -a /etc/profile.d/bedrock_env.sh
+
+            # Make the file executable
+            sudo chmod +x /etc/profile.d/bedrock_env.sh
+
+            # Source the new file to make variables available immediately
+            source /etc/profile.d/bedrock_env.sh
+            
+            # Ensure the Streamlit app can access these variables
+            echo "source /etc/profile.d/bedrock_env.sh" >> /home/ubuntu/.bashrc
+
+            echo "Starting Streamlit app"
+            cd /home/ubuntu/app/streamlit_app
+            nohup streamlit run app.py --server.port=8501 --server.address=0.0.0.0 > /home/ubuntu/app/streamlit_app/streamlit.log 2>&1 &
+
+            echo "User data script execution completed"
+
+    # Lambda Function
+    LambdaFunction:
+      Type: AWS::Lambda::Function
+      Properties:
+        FunctionName: !Sub "${AWS::StackName}-BedrockAgentHandler"
+        Handler: lambda_function.lambda_handler
+        Role: !GetAtt LambdaExecutionRole.Arn
+        Code:
+          S3Bucket: !Sub ${S3BucketName}
+          S3Key: bedrock-agent-text2sql-redshift/function/lambda_function.zip
+        Runtime: python3.8
+        Timeout: 60
+        MemorySize: 128
+        Environment:
+          Variables:
+            REDSHIFT_WORKGROUP_NAME: !Ref RedshiftWorkgroupName
+
+    # Lambda Execution Role
+    LambdaExecutionRole:
+      Type: AWS::IAM::Role
+      Properties:
+        AssumeRolePolicyDocument:
+          Version: '2012-10-17'
+          Statement:
+            - Effect: Allow
+              Principal:
+                Service: lambda.amazonaws.com
+              Action: sts:AssumeRole
+        ManagedPolicyArns:
+          - arn:aws:iam::aws:policy/service-role/AWSLambdaBasicExecutionRole
+        Policies:
+          - PolicyName: RedshiftServerlessAccess
+            PolicyDocument:
+              Version: '2012-10-17'
+              Statement:
+                - Effect: Allow
+                  Action:
+                    - redshift-data:DescribeStatement
+                    - redshift-data:GetStatementResult
+                    - redshift-data:ListDatabases
+                    - redshift-data:ListSchemas
+                    - redshift-data:ExecuteStatement
+                    - redshift-data:ListTables
+                    - redshift-data:ListStatements
+                    - redshift-serverless:GetCredentials
+                  Resource: '*'
+    # Lambda Function Resource Policy
+    LambdaResourcePolicy:
+      Type: AWS::Lambda::Permission
+      DependsOn: BedrockAgent
+      Properties:
+        FunctionName: !Ref LambdaFunction
+        Action: lambda:InvokeFunction
+        Principal: bedrock.amazonaws.com
+        SourceArn: !Sub "arn:aws:bedrock:${AWS::Region}:${AWS::AccountId}:agent/*"
+
+    # Update Bedrock Agent
+    BedrockAgent:
+      Type: AWS::Bedrock::Agent
+      Properties:
+        AgentName: !Ref AgentName
+        Description: !Ref AgentDescription
+        AutoPrepare: true
+        FoundationModel: "anthropic.claude-3-5-sonnet-20240620-v1:0"
+        Instruction: |
+          **Role:** SQL Developer for Amazon Redshift
+
+          **Objective:** Generate SQL queries to retrieve and analyze data based on the provided schema and user requests. Return both the SQL queries and results.
+
+          ### Tasks:
+
+          1. **Query Decomposition and Understanding:**
+             - **Analyze User Requests:** Understand the primary objective, whether retrieving specific data, joining data across clouds, or applying filters.
+             - **Break Down Complex Queries:** If needed, decompose the request into sub-queries, each targeting specific parts of the schema.
+
+          2. **SQL Query Creation:**
+             - **Use Full Path Notation:** Construct SQL queries using the full path format: `database.schema.table`.
+             - **Precision and Relevance:** Tailor each query to precisely retrieve the required data. Ensure correct usage of tables, columns, and filters.
+
+          3. **Query Execution and Response:**
+             - **Execute SQL Queries:** Run the queries in Amazon Athena, ensuring accurate results.
+             - **Return Queries and Results:** Provide the executed SQL queries alongside the results, maintaining data accuracy.
+
+          ## Tables and Schema:
+          You can use action group to get the correct schema using /getschema api and passing the relevant database to the API.
+
+          ## Sample Queries
+
+          SELECT
+              *
+          FROM
+              "sample_data_dev"."tpcds"."call_center";
+        AgentResourceRoleArn: !GetAtt BedrockAgentRole.Arn
+        ActionGroups:
+          - ActionGroupName: RedshiftServerlessInteraction
+            Description: Interact with Redshift Serverless database
+            ActionGroupExecutor: 
+              Lambda: !GetAtt LambdaFunction.Arn
+            ApiSchema:
+              Payload: |
+                {
+                  "openapi": "3.0.0",
+                  "info": {
+                    "title": "Redshift Serverless Database Schema and ACL API",
+                    "version": "1.0.0",
+                    "description": "APIs for retrieving database table schemas, executing queries on database tables, and retrieving user access to schemas in Redshift Serverless."
+                  },
+                  "paths": {
+                    "/getschema": {
+                      "post": {
+                        "summary": "Get a list of all tables and their schema in the specified database",
+                        "description": "Retrieve the list of all tables and their schemas for the specified database in Redshift Serverless.",
+                        "operationId": "getschema",
+                        "requestBody": {
+                          "required": true,
+                          "content": {
+                            "application/json": {
+                              "schema": {
+                                "type": "object",
+                                "properties": {
+                                  "db": {
+                                    "type": "string",
+                                    "description": "The name of the database to retrieve the schema from."
+                                  }
+                                },
+                                "required": ["db"]
+                              }
+                            }
+                          }
+                        },
+                        "responses": {
+                          "200": {
+                            "description": "Successfully retrieved the list of table names and their schemas",
+                            "content": {
+                              "application/json": {
+                                "schema": {
+                                  "type": "array",
+                                  "items": {
+                                    "type": "object",
+                                    "properties": {
+                                      "Table": {
+                                        "type": "string",
+                                        "description": "The name of the table in the database."
+                                      },
+                                      "Schema": {
+                                        "type": "string",
+                                        "description": "The schema of the table in JSON format, containing all columns."
+                                      }
+                                    }
+                                  }
+                                }
+                              }
+                            }
+                          },
+                          "400": {
+                            "description": "Bad request. The database name is missing or invalid."
+                          }
+                        }
+                      }
+                    },
+                    "/querydatabase": {
+                      "post": {
+                        "summary": "Execute a query on a specific database table",
+                        "description": "Send a query to the Redshift Serverless database to retrieve information. The API accepts one SQL query at a time and returns the query results.",
+                        "operationId": "querydatabase",
+                        "requestBody": {
+                          "required": true,
+                          "content": {
+                            "application/json": {
+                              "schema": {
+                                "type": "object",
+                                "properties": {
+                                  "user_id": {
+                                    "type": "string",
+                                    "description": "The ID of the user executing the query. Optional for DESCRIBE queries."
+                                  },
+                                  "database": {
+                                    "type": "string",
+                                    "description": "The name of the database where the query will be executed."
+                                  },
+                                  "schema": {
+                                    "type": "string",
+                                    "description": "The name of the schema containing the table."
+                                  },
+                                  "table": {
+                                    "type": "string",
+                                    "description": "The name of the table to query."
+                                  },
+                                  "query": {
+                                    "type": "string",
+                                    "description": "SQL statement to query the database table."
+                                  }
+                                },
+                                "required": ["database", "schema", "query"]
+                              }
+                            }
+                          }
+                        },
+                        "responses": {
+                          "200": {
+                            "description": "Query executed successfully",
+                            "content": {
+                              "application/json": {
+                                "schema": {
+                                  "type": "array",
+                                  "items": {
+                                    "type": "object",
+                                    "description": "Each object represents a row from the query result."
+                                  }
+                                }
+                              }
+                            }
+                          },
+                          "400": {
+                            "description": "Bad request. One or more required fields are missing or invalid."
+                          },
+                          "403": {
+                            "description": "Forbidden. User does not have access to the specified schema."
+                          }
+                        }
+                      }
+                    },
+                    "/getUserACL": {
+                      "post": {
+                        "summary": "Get user's access to schemas",
+                        "description": "Retrieve the list of schemas a given user has access to in Redshift Serverless.",
+                        "operationId": "getUserACL",
+                        "requestBody": {
+                          "required": true,
+                          "content": {
+                            "application/json": {
+                              "schema": {
+                                "type": "object",
+                                "properties": {
+                                  "user_id": {
+                                    "type": "string",
+                                    "description": "The ID of the user to retrieve the schema access for."
+                                  }
+                                },
+                                "required": ["user_id"]
+                              }
+                            }
+                          }
+                        },
+                        "responses": {
+                          "200": {
+                            "description": "Successfully retrieved the user's access to schemas",
+                            "content": {
+                              "application/json": {
+                                "schema": {
+                                  "type": "object",
+                                  "properties": {
+                                    "schemas": {
+                                      "type": "array",
+                                      "items": {
+                                        "type": "string"
+                                      },
+                                      "description": "A list of schemas the user has access to."
+                                    }
+                                  }
+                                }
+                              }
+                            }
+                          },
+                          "400": {
+                            "description": "Bad request. The user_id is missing or invalid."
+                          }
+                        }
+                      }
+                    }
+                  }
+                }
+
+    # Update Bedrock Agent Role
+    BedrockAgentRole:
+      Type: AWS::IAM::Role
+      Properties:
+        AssumeRolePolicyDocument:
+          Version: '2012-10-17'
+          Statement:
+            - Effect: Allow
+              Principal:
+                Service: bedrock.amazonaws.com
+              Action: sts:AssumeRole
+        ManagedPolicyArns:
+          - arn:aws:iam::aws:policy/AmazonBedrockFullAccess
+        Policies:
+          - PolicyName: InvokeLambdaFunction
+            PolicyDocument:
+              Version: '2012-10-17'
+              Statement:
+                - Effect: Allow
+                  Action:
+                    - lambda:InvokeFunction
+                  Resource: !GetAtt LambdaFunction.Arn
+
+
+    BedrockAgentAlias:
+      Type: AWS::Bedrock::AgentAlias
+      Properties:
+        AgentId: !Ref BedrockAgent
+        AgentAliasName: "Production"
+        Description: "Alias for my Bedrock Agent"
+
+  Outputs:
+    InstanceId:
+      Description: InstanceId of the newly created EC2 instance
+      Value: !Ref EC2Instance
+
+    StreamlitURL:
+      Description: URL to access the Streamlit application
+      Value: !Sub "http://${EC2Instance.PublicIp}:8501"
+
+    BedrockAgentId:
+      Description: ID of the created Bedrock Agent
+      Value: !Ref BedrockAgent
+
+    BedrockAgentAliasId:
+      Description: ID of the Bedrock Agent Alias
+      Value: !Ref BedrockAgentAlias
+
+    LambdaFunctionArn:
+      Description: ARN of the Lambda function
+      Value: !GetAtt LambdaFunction.Arn
