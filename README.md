@@ -40,7 +40,7 @@ This project sets up an Amazon Bedrock agent with an action group that translate
 
 ### Step 4: Prepare Lambda Function (if needed)
 If you need to modify the Lambda function:
-1. Navigate to `bedrock-agent-text2sql-redshift/function/`
+1. Navigate to `Setup-Amazon-Bedrock-Agent-for-Text2SQL-Using-Amazon-Redshift-Serverless-with-Streamlit/function/`
 2. Make your changes to `lambda_function.py` and/or `redshift_serverless_functions.py`
 3. Zip both files together: 
    ```
@@ -48,22 +48,22 @@ If you need to modify the Lambda function:
    ```
 
 ### Step 5: Update Streamlit App Credentials
-1. Open `bedrock-agent-text2sql-redshift/streamlit_app/credentials.json`
+1. Open `Setup-Amazon-Bedrock-Agent-for-Text2SQL-Using-Amazon-Redshift-Serverless-with-Streamlit/streamlit_app/credentials.json`
 2. Add or modify user credentials as needed for frontend access
 
 ### Step 6: Create S3 Bucket and Upload Files
 1. Create a new S3 bucket in your preferred region
-2. Upload the entire `bedrock-agent-text2sql-redshift/` folder to the root of this bucket using the following AWS CLI command:
+2. Upload the entire `Setup-Amazon-Bedrock-Agent-for-Text2SQL-Using-Amazon-Redshift-Serverless-with-Streamlit/` folder to the root of this bucket using the following AWS CLI command:
    ```
-   cd bedrock-agent-text2sql-redshift/
-   aws s3 sync . s3://your-bucket-name/bedrock-agent-text2sql-redshift/
+   cd Setup-Amazon-Bedrock-Agent-for-Text2SQL-Using-Amazon-Redshift-Serverless-with-Streamlit/
+   aws s3 sync . s3://your-bucket-name/Setup-Amazon-Bedrock-Agent-for-Text2SQL-Using-Amazon-Redshift-Serverless-with-Streamlit/
    ```
    Replace `your-bucket-name` with the name of the S3 bucket you created.
 
 ### Step 7: Create CloudFormation Stack
 1. Open the CloudFormation console
 2. Click "Create stack" > "With new resources (standard)"
-3. Upload the template file: `bedrock-agent-text2sql-redshift/cloudformation-template/ec2-streamlit-template.yaml`
+3. Upload the template file: `Setup-Amazon-Bedrock-Agent-for-Text2SQL-Using-Amazon-Redshift-Serverless-with-Streamlit/cloudformation-template/ec2-streamlit-template.yaml`
 4. Fill in the required parameters:
    - InstanceType: Choose an appropriate EC2 instance type
    - KeyPair: Select the SSH key pair created in Step 1
