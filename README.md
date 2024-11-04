@@ -50,6 +50,7 @@ If you need to modify the Lambda function:
 ### Step 5: Update Streamlit App Credentials
 1. Open `Setup-Amazon-Bedrock-Agent-for-Text2SQL-Using-Amazon-Redshift-Serverless-with-Streamlit/streamlit_app/credentials.json`
 2. Add or modify user credentials as needed for frontend access
+3. Also ACL mapping is hard-coded in the AWS Lambda function to illustrate ACL logic. For production system, this would require Authorization logic.
 
 ### Step 6: Create S3 Bucket and Upload Files
 1. Create a new S3 bucket in your preferred region
